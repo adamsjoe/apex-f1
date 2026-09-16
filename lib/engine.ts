@@ -11,6 +11,7 @@ export interface DriverSnap {
   throttle: number;
   brake: number;
   gear: number;
+  rpm: number;
   drs: number;
 }
 export interface Snapshot {
@@ -45,6 +46,7 @@ export class ReplayEngine {
   private playing = false;
   private speed = 1;
   private loop = true;
+  private zoom = true;
   private dpr = 1;
   private TW = 0;
   private TH = 0;
@@ -90,6 +92,9 @@ export class ReplayEngine {
   }
   setSpeed(s: number) {
     this.speed = s;
+  }
+  setZoom(on: boolean) {
+    this.zoom = on;
   }
   destroy() {
     cancelAnimationFrame(this.raf);
@@ -224,6 +229,133 @@ export class ReplayEngine {
     this.drawTrack(W);
     for (let i = 0; i < this.model!.drivers.length; i++) this.drawGhost(W, i);
     this.drawTraces();
+    if (this.zoom && this.model!.drivers.length) this.drawZoom(W);
+  }
+
+  private rr(x: number, y: number, w: number, h: number, r: number) {
+    const ctx = this.tctx as CanvasRenderingContext2D & { roundRect?: (x: number, y: number, w: number, h: number, r: number) => void };
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, r);
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+  }
+
+  private drawZoom(W: ReturnType<ReplayEngine["worldT"]>) {
+    const ctx = this.tctx;
+    const m = this.model!;
+    const heads = m.drivers.map((d) => sampleAt(d, this.T));
+    let cx = 0, cy = 0;
+    for (const h of heads) {
+      cx += h.x;
+      cy += h.y;
+    }
+    cx /= heads.length;
+    cy /= heads.length;
+    const gap = heads.length >= 2 ? Math.hypot(heads[0].x - heads[1].x, heads[0].y - heads[1].y) : 0;
+    const bw = m.bounds.maxX - m.bounds.minX;
+    const spanWorld = Math.max(gap * 2.8, bw * 0.12, 300); // world units (~1/10 m); floor ~30 m
+
+    const pad = 14;
+    const Zw = Math.min(this.TW, this.TH) * 0.36;
+    const Zh = Zw * 0.7;
+    const rx = this.TW - Zw - pad;
+    const ry = this.TH - Zh - pad;
+    const z = Zw / spanWorld;
+    const halfX = spanWorld / 2;
+    const halfY = (Zh / Zw) * spanWorld / 2;
+    const minWx = cx - halfX, minWy = cy - halfY;
+    const ztx = (p: Pt) => rx + (p[0] - minWx) * z;
+    const zty = (p: Pt) => ry + Zh - (p[1] - minWy) * z;
+
+    // reticle on the main view (the world region being magnified)
+    const bl = W.tx([minWx, 0]), br = W.tx([cx + halfX, 0]);
+    const bt = W.ty([0, cy + halfY]), bb = W.ty([0, minWy]);
+    const rL = Math.min(bl, br), rT = Math.min(bt, bb), rWd = Math.abs(br - bl), rHt = Math.abs(bb - bt);
+    ctx.save();
+    ctx.strokeStyle = "rgba(233,237,246,0.5)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(rL, rT, rWd, rHt);
+    ctx.setLineDash([]);
+    // connector lines pointing from the reticle to the inset
+    ctx.strokeStyle = "rgba(233,237,246,0.16)";
+    ctx.beginPath();
+    ctx.moveTo(rL + rWd, rT);
+    ctx.lineTo(rx, ry);
+    ctx.moveTo(rL + rWd, rT + rHt);
+    ctx.lineTo(rx, ry + Zh);
+    ctx.stroke();
+    ctx.restore();
+
+    // inset
+    ctx.save();
+    this.rr(rx, ry, Zw, Zh, 8);
+    ctx.clip();
+    ctx.fillStyle = "#0a0f18";
+    ctx.fillRect(rx, ry, Zw, Zh);
+    const pts = m.track;
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const x = ztx(pts[i]), y = zty(pts[i]);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.closePath();
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(120,135,170,0.16)";
+    ctx.lineWidth = Math.max(6, z * 90);
+    ctx.stroke();
+    ctx.strokeStyle = "rgba(150,168,205,0.22)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    for (let i = 0; i < m.drivers.length; i++) {
+      const d = m.drivers[i];
+      const s = d.samples;
+      const upto = indexAtT(s, Math.min(this.T, d.lapTime || Infinity));
+      const start = Math.max(0, upto - 45);
+      const h = heads[i];
+      ctx.beginPath();
+      for (let k = start; k <= upto; k++) {
+        const x = ztx([s[k].x, s[k].y]), y = zty([s[k].x, s[k].y]);
+        k === start ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.lineTo(ztx([h.x, h.y]), zty([h.x, h.y]));
+      ctx.strokeStyle = d.colour;
+      ctx.globalAlpha = 0.6;
+      ctx.lineWidth = 3;
+      ctx.shadowColor = d.colour;
+      ctx.shadowBlur = 12;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      ctx.arc(ztx([h.x, h.y]), zty([h.x, h.y]), 6, 0, 7);
+      ctx.fillStyle = d.colour;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#e9edf6";
+      ctx.font = "600 11px 'Space Grotesk', sans-serif";
+      ctx.fillText(d.code, ztx([h.x, h.y]) + 9, zty([h.x, h.y]) - 8);
+    }
+    ctx.restore();
+
+    // inset border + label
+    ctx.save();
+    this.rr(rx, ry, Zw, Zh, 8);
+    ctx.strokeStyle = "rgba(150,168,205,0.3)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = "rgba(124,134,156,0.9)";
+    ctx.font = "500 9px 'IBM Plex Mono', monospace";
+    ctx.fillText("ZOOM ×" + (z / W.s).toFixed(1), rx + 8, ry + 13);
+    ctx.restore();
   }
 
   private emit() {
@@ -239,6 +371,7 @@ export class ReplayEngine {
         throttle: s.throttle,
         brake: s.brake,
         gear: s.gear,
+        rpm: s.rpm,
         drs: s.drs,
       };
     });
@@ -246,9 +379,11 @@ export class ReplayEngine {
     if (m.drivers.length >= 2) {
       const [A, B] = m.drivers;
       const sA = sampleAt(A, T), sB = sampleAt(B, T);
-      const refD = Math.max(sA.d, sB.d);
-      const dl = tAtDistance(A, refD) - tAtDistance(B, refD);
-      delta = { value: dl, leader: dl > 0 ? B.code : A.code, level: Math.abs(dl) < 0.02 };
+      const leaderIsA = sA.d >= sB.d; // whoever is physically further along the lap
+      const refD = leaderIsA ? sA.d : sB.d;
+      const trailer = leaderIsA ? B : A;
+      const gap = Math.max(0, tAtDistance(trailer, refD) - T);
+      delta = { value: gap, leader: (leaderIsA ? A : B).code, level: gap < 0.02 };
     }
     const snap: Snapshot = {
       T,

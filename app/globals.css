@@ -58,6 +58,11 @@ select:focus-visible { outline: none; border-color: rgba(92, 225, 182, 0.5); }
 .chips { display: flex; gap: 6px; margin-top: 6px; }
 .chip { font-family: var(--mono); font-size: 11px; padding: 3px 7px; border-radius: 6px; background: rgba(150, 168, 205, 0.1); color: var(--muted); }
 .chip.drson { background: rgba(92, 225, 182, 0.18); color: var(--pass); }
+.revwrap { position: relative; width: 64px; height: 64px; margin: 6px auto 2px; }
+.revwrap svg { width: 64px; height: 64px; display: block; }
+.gearbig { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--sans); font-weight: 700; font-size: 22px; letter-spacing: -0.03em; animation: gearflash 0.3s ease-out; }
+@keyframes gearflash { 0% { transform: scale(1.45); color: #fff; } 100% { transform: scale(1); } }
+.rpmnum { text-align: center; font-family: var(--mono); font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 3px; }
 
 .hud { position: absolute; left: clamp(12px, 2vw, 22px); top: clamp(12px, 2vw, 22px); width: min(78vw, 270px); background: var(--panel); border: 1px solid var(--line); border-radius: 11px; backdrop-filter: blur(13px); -webkit-backdrop-filter: blur(13px); padding: 12px 13px; font-family: var(--mono); pointer-events: none; }
 .hud .top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 9px; }
@@ -70,6 +75,9 @@ select:focus-visible { outline: none; border-color: rgba(92, 225, 182, 0.5); }
 .hgrid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 11px; }
 .hgrid .k { color: var(--faint); }
 .hgrid .v { text-align: right; color: var(--text); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hsrc { display: flex; gap: 10px; margin-top: 5px; font-size: 11px; }
+.hsrc .k { color: var(--faint); flex: none; }
+.hsrc .v { color: var(--text); word-break: break-word; line-height: 1.35; text-align: left; }
 .hchecks { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); display: grid; gap: 3px; }
 .hchk { display: flex; align-items: center; gap: 7px; font-size: 10px; color: var(--muted); }
 .hchk .m { width: 12px; height: 12px; flex: none; }
@@ -104,4 +112,4 @@ select:focus-visible { outline: none; border-color: rgba(92, 225, 182, 0.5); }
   .drivers, .delta, .traceWrap, .live { flex: 1 1 46%; }
   .hud { width: min(70vw, 240px); }
 }
-@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } .gearbig { animation: none; } }

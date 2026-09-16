@@ -28,6 +28,7 @@ interface ChecksState {
 }
 
 const SPEEDS = [0.5, 1, 2, 4];
+const RPM_MAX = 13000;
 
 function fmtLap(s: number) {
   const m = Math.floor(s / 60);
@@ -42,6 +43,7 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
   const lastApplied = useRef(0);
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [spi, setSpi] = useState(1);
+  const [zoomOn, setZoomOn] = useState(true);
 
   // mount engine once
   useEffect(() => {
@@ -75,6 +77,25 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
     if (model && engineRef.current) engineRef.current.setModel(model);
   }, [model]);
 
+  // detect gear changes to retrigger the flash animation (via element key)
+  const gearPrev = useRef<Record<string, number>>({});
+  const [gearFlash, setGearFlash] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!snap) return;
+    let changed = false;
+    const next: Record<string, number> = { ...gearFlash };
+    for (const d of snap.drivers) {
+      const prev = gearPrev.current[d.code];
+      if (prev !== undefined && prev !== d.gear) {
+        next[d.code] = (next[d.code] || 0) + 1;
+        changed = true;
+      }
+      gearPrev.current[d.code] = d.gear;
+    }
+    if (changed) setGearFlash(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap]);
+
   // self-check states derived from stage/model
   const checks: ChecksState = {
     sessions: model || !stage.show ? "ok" : "wait",
@@ -105,14 +126,16 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
             <span className="v">{snap ? Math.round(snap.fps) : "–"}</span>
             <span className="k">Frame</span>
             <span className="v">{snap ? snap.ft.toFixed(1) + " ms" : "– ms"}</span>
-            <span className="k">Source</span>
-            <span className="v" title={snap?.source}>{snap?.source ?? "–"}</span>
             <span className="k">Join</span>
-            <span className="v">{snap?.join ?? "–"}</span>
+            <span className="v" title="Location joined onto car data by nearest timestamp within this tolerance">{snap?.join ?? "–"}</span>
             <span className="k">Points</span>
-            <span className="v">{snap?.points ?? "–"}</span>
+            <span className="v" title="Merged telemetry samples per driver for this lap">{snap?.points ?? "–"}</span>
             <span className="k">Playback</span>
-            <span className="v">{snap ? "Catmull→60fps" : "–"}</span>
+            <span className="v" title="~3.7 Hz source data, Catmull-Rom interpolated to 60fps">{snap ? "Catmull→60fps" : "–"}</span>
+          </div>
+          <div className="hsrc">
+            <span className="k">Source</span>
+            <span className="v">{snap?.source ?? "–"}</span>
           </div>
           <div className="hchecks">
             {CHECKS.map(([k, label]) => (
@@ -148,8 +171,8 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
             ))}
           </div>
 
-          <div className="delta">
-            <div className="lbl">Delta at track position</div>
+          <div className="delta" title="How far the trailing car is behind the leader at the leader's current track position.">
+            <div className="lbl">Gap to leader</div>
             <div
               className="val"
               style={{
@@ -159,7 +182,7 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
                     : "var(--text)",
               }}
             >
-              {snap?.delta ? (snap.delta.value >= 0 ? "+" : "") + snap.delta.value.toFixed(3) + "s" : "—"}
+              {snap?.delta ? "+" + snap.delta.value.toFixed(3) + "s" : "—"}
             </div>
             <div className="who">
               {snap?.delta
@@ -170,7 +193,7 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
             </div>
           </div>
 
-          <div className="traceWrap">
+          <div className="traceWrap" title="Speed of each driver across the lap, plotted by distance. Dashed line marks the current position.">
             <div className="h">
               <span>Speed · km/h</span>
               <span>by distance</span>
@@ -179,25 +202,40 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
           </div>
 
           <div className="live">
-            {snap?.drivers.map((d) => (
-              <div className="gauge" key={d.code}>
-                <div className="t" style={{ color: d.colour }}>{d.code}</div>
-                <div className="barwrap">
-                  <span className="t">T</span>
-                  <div className="bar"><i style={{ width: Math.round(d.throttle) + "%", background: d.colour }} /></div>
-                  <span className="num">{Math.round(d.throttle)}</span>
+            {snap?.drivers.map((d) => {
+              const f = Math.max(0, Math.min(1, d.rpm / RPM_MAX));
+              return (
+                <div className="gauge" key={d.code} title={d.name}>
+                  <div className="t" style={{ color: d.colour }}>{d.code}</div>
+                  <div className="revwrap" title={"RPM " + Math.round(d.rpm) + " · gear " + d.gear}>
+                    <svg viewBox="0 0 64 64">
+                      <g transform="rotate(135 32 32)">
+                        <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke="rgba(150,168,205,0.14)" strokeWidth="5" strokeDasharray="75 100" strokeLinecap="round" />
+                        <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke="rgba(255,77,77,0.55)" strokeWidth="5" strokeDasharray="9 100" strokeDashoffset={-66} strokeLinecap="round" />
+                        <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke={d.colour} strokeWidth="5" strokeDasharray={`${(75 * f).toFixed(2)} 100`} strokeLinecap="round" />
+                      </g>
+                    </svg>
+                    <div className="gearbig" key={d.code + "-" + (gearFlash[d.code] || 0)} style={{ color: d.colour }}>
+                      {d.gear}
+                    </div>
+                  </div>
+                  <div className="rpmnum">{Math.round(d.rpm).toLocaleString()} rpm</div>
+                  <div className="barwrap" title="Throttle — percent of full throttle">
+                    <span className="t">T</span>
+                    <div className="bar"><i style={{ width: Math.round(d.throttle) + "%", background: d.colour }} /></div>
+                    <span className="num">{Math.round(d.throttle)}</span>
+                  </div>
+                  <div className="barwrap" title="Brake — on or off">
+                    <span className="t">B</span>
+                    <div className="bar"><i style={{ width: (d.brake ? 100 : 0) + "%", background: "#ff6b6b" }} /></div>
+                    <span className="num">{d.brake ? 100 : 0}</span>
+                  </div>
+                  <div className="chips">
+                    <span className={"chip" + (d.drs ? " drson" : "")} title="DRS — Drag Reduction System (green = open)">DRS</span>
+                  </div>
                 </div>
-                <div className="barwrap">
-                  <span className="t">B</span>
-                  <div className="bar"><i style={{ width: (d.brake ? 100 : 0) + "%", background: "#ff6b6b" }} /></div>
-                  <span className="num">{d.brake ? 100 : 0}</span>
-                </div>
-                <div className="chips">
-                  <span className="chip">G{d.gear}</span>
-                  <span className={"chip" + (d.drs ? " drson" : "")}>DRS</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
@@ -235,7 +273,20 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
         </span>
         <button
           className="spd"
+          aria-label="Toggle zoom inset"
+          title="Zoom inset — a close-up that follows the two cars"
+          onClick={() => {
+            const n = !zoomOn;
+            setZoomOn(n);
+            engine?.setZoom(n);
+          }}
+        >
+          {zoomOn ? "Zoom ✓" : "Zoom"}
+        </button>
+        <button
+          className="spd"
           aria-label="Playback speed"
+          title="Playback speed — click to cycle"
           onClick={() => {
             const n = (spi + 1) % SPEEDS.length;
             setSpi(n);
