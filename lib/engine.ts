@@ -6,6 +6,7 @@ const VMAX = 340; // km/h, trace scaling
 export interface DriverSnap {
   code: string;
   name: string;
+  team: string;
   colour: string;
   lapTime: number;
   throttle: number;
@@ -366,6 +367,7 @@ export class ReplayEngine {
       return {
         code: d.code,
         name: d.name,
+        team: d.team,
         colour: d.colour,
         lapTime: d.lapTime,
         throttle: s.throttle,

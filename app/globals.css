@@ -35,9 +35,13 @@ select:focus-visible { outline: none; border-color: rgba(92, 225, 182, 0.5); }
 .drivers { display: grid; gap: 8px; }
 .drv { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); }
 .drv .swatch { width: 11px; height: 11px; border-radius: 50%; flex: none; box-shadow: 0 0 10px currentColor; }
+.dmeta { flex: 1; min-width: 0; }
+.dtop { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.dbot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 1px; }
 .drv .code { font-weight: 600; letter-spacing: -0.02em; font-size: 15px; }
 .drv .name { color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.drv .lap { margin-left: auto; font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.drv .team { color: var(--faint); font-size: 10.5px; white-space: nowrap; flex: none; }
+.drv .lap { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; flex: none; }
 
 .delta { border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; text-align: center; background: var(--bg2); }
 .delta .lbl { font-size: 11px; color: var(--muted); letter-spacing: 0.02em; }
@@ -57,7 +61,7 @@ select:focus-visible { outline: none; border-color: rgba(92, 225, 182, 0.5); }
 .num { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
 .chips { display: flex; gap: 6px; margin-top: 6px; }
 .chip { font-family: var(--mono); font-size: 11px; padding: 3px 7px; border-radius: 6px; background: rgba(150, 168, 205, 0.1); color: var(--muted); }
-.chip.drson { background: rgba(92, 225, 182, 0.18); color: var(--pass); }
+.chip.drson { background: var(--pass); color: #06231b; font-weight: 500; box-shadow: 0 0 10px rgba(92, 225, 182, 0.55); }
 .revwrap { position: relative; width: 64px; height: 64px; margin: 6px auto 2px; }
 .revwrap svg { width: 64px; height: 64px; display: block; }
 .gearbig { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--sans); font-weight: 700; font-size: 22px; letter-spacing: -0.03em; animation: gearflash 0.3s ease-out; }

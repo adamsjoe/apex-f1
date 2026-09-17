@@ -164,9 +164,16 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
             {snap?.drivers.map((d) => (
               <div className="drv" key={d.code}>
                 <span className="swatch" style={{ color: d.colour, background: d.colour }} />
-                <span className="code">{d.code}</span>
-                <span className="name">{d.name}</span>
-                <span className="lap">{d.lapTime ? fmtLap(d.lapTime) : "—"}</span>
+                <div className="dmeta">
+                  <div className="dtop">
+                    <span className="code">{d.code}</span>
+                    <span className="lap">{d.lapTime ? fmtLap(d.lapTime) : "—"}</span>
+                  </div>
+                  <div className="dbot">
+                    <span className="name">{d.name}</span>
+                    {d.team && <span className="team">{d.team}</span>}
+                  </div>
+                </div>
               </div>
             ))}
           </div>
