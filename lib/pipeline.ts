@@ -9,7 +9,7 @@ import type {
   OfflineSample,
 } from "./types";
 
-const JOIN_TOL_MS = 500;
+export const JOIN_TOL_MS = 500;
 
 /** Fastest timed, non-pit-out lap for a driver, or null. */
 export function fastestLap(laps: Of1Lap[], driverNumber: number): Of1Lap | null {
@@ -49,9 +49,9 @@ export function buildDriverModel(
     while (j < l.length - 1 && Math.abs(l[j + 1]._t - cp._t) <= Math.abs(l[j]._t - cp._t)) j++;
     const lp = l[j];
     if (!lp) continue;
+    joined++;
     const dt = Math.abs(lp._t - cp._t);
     if (dt > JOIN_TOL_MS) continue;
-    joined++;
     within++;
     samples.push({
       t: (cp._t - t0) / 1000,
@@ -119,7 +119,7 @@ export function fromOffline(s: OfflineSample): Model {
 export function indexAtT(s: Sample[], t: number): number {
   let lo = 0, hi = s.length - 1;
   if (t <= s[0].t) return 0;
-  if (t >= s[hi].t) return hi - 1;
+  if (t >= s[hi].t) return Math.max(0, hi - 1);
   while (lo < hi) {
     const m = (lo + hi) >> 1;
     if (s[m].t < t) lo = m + 1;
@@ -140,13 +140,14 @@ export interface SamplePt extends Sample {
 export function sampleAt(d: DriverModel, t: number): SamplePt {
   const s = d.samples;
   const end = d.lapTime || s[s.length - 1].t;
-  if (t >= end) return { ...s[s.length - 1], done: true };
-  const i = indexAtT(s, t);
+  const done = t >= end;
+  const tt = done ? end : t;
+  const i = indexAtT(s, tt);
   const a = s[i], b = s[i + 1];
-  const f = (t - a.t) / ((b.t - a.t) || 1);
+  const f = (tt - a.t) / ((b.t - a.t) || 1);
   const p0 = s[Math.max(0, i - 1)], p3 = s[Math.min(s.length - 1, i + 2)];
   return {
-    t,
+    t: tt,
     x: cm(p0.x, a.x, b.x, p3.x, f),
     y: cm(p0.y, a.y, b.y, p3.y, f),
     d: a.d + (b.d - a.d) * f,
@@ -156,7 +157,7 @@ export function sampleAt(d: DriverModel, t: number): SamplePt {
     gear: f < 0.5 ? a.gear : b.gear,
     rpm: a.rpm + (b.rpm - a.rpm) * f,
     drs: f < 0.5 ? a.drs : b.drs,
-    done: false,
+    done,
   };
 }
 

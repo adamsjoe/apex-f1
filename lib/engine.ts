@@ -1,7 +1,62 @@
 import type { Model } from "./types";
-import { sampleAt, tAtDistance, indexAtT } from "./pipeline";
+import { sampleAt, tAtDistance, indexAtT, JOIN_TOL_MS, type SamplePt } from "./pipeline";
 
-const VMAX = 340; // km/h, trace scaling
+export const VMAX = 340; // km/h, trace scaling
+export const KPH_TO_MPH = 0.621371;
+
+export type Theme = "light" | "dark";
+export type SpeedUnit = "kph" | "mph";
+
+interface Palette {
+  trackOuter: string;
+  trackInner: string;
+  startDot: string;
+  reticle: string;
+  connector: string;
+  zoomBg: string;
+  zoomTrackOuter: string;
+  zoomTrackInner: string;
+  zoomLabel: string;
+  zoomBorder: string;
+  zoomBadge: string;
+  leaderLine: string;
+  axisGrid: string;
+  axisLabel: string;
+}
+const PALETTES: Record<Theme, Palette> = {
+  dark: {
+    trackOuter: "rgba(120,135,170,0.14)",
+    trackInner: "rgba(150,168,205,0.28)",
+    startDot: "rgba(233,237,246,0.6)",
+    reticle: "rgba(233,237,246,0.5)",
+    connector: "rgba(233,237,246,0.16)",
+    zoomBg: "#0a0f18",
+    zoomTrackOuter: "rgba(120,135,170,0.16)",
+    zoomTrackInner: "rgba(150,168,205,0.22)",
+    zoomLabel: "#e9edf6",
+    zoomBorder: "rgba(150,168,205,0.3)",
+    zoomBadge: "rgba(124,134,156,0.9)",
+    leaderLine: "rgba(233,237,246,0.4)",
+    axisGrid: "rgba(150,168,205,0.1)",
+    axisLabel: "rgba(150,168,205,0.55)",
+  },
+  light: {
+    trackOuter: "rgba(60,72,110,0.10)",
+    trackInner: "rgba(60,72,110,0.32)",
+    startDot: "rgba(18,21,28,0.55)",
+    reticle: "rgba(18,21,28,0.45)",
+    connector: "rgba(18,21,28,0.14)",
+    zoomBg: "#eef1f7",
+    zoomTrackOuter: "rgba(60,72,110,0.12)",
+    zoomTrackInner: "rgba(60,72,110,0.28)",
+    zoomLabel: "#12151c",
+    zoomBorder: "rgba(60,72,110,0.3)",
+    zoomBadge: "rgba(91,100,120,0.9)",
+    leaderLine: "rgba(18,21,28,0.35)",
+    axisGrid: "rgba(20,30,55,0.09)",
+    axisLabel: "rgba(20,30,55,0.55)",
+  },
+};
 
 export interface DriverSnap {
   code: string;
@@ -9,6 +64,7 @@ export interface DriverSnap {
   team: string;
   colour: string;
   lapTime: number;
+  speed: number;
   throttle: number;
   brake: number;
   gear: number;
@@ -46,7 +102,6 @@ export class ReplayEngine {
   private T = 0;
   private playing = false;
   private speed = 1;
-  private loop = true;
   private zoom = true;
   private dpr = 1;
   private TW = 0;
@@ -57,7 +112,10 @@ export class ReplayEngine {
   private fps = 0;
   private ft = 0;
   private lastHud = 0;
-  readonly join = "±500ms nearest";
+  private heads: SamplePt[] = [];
+  private palette = PALETTES.dark;
+  private speedUnit: SpeedUnit = "kph";
+  readonly join = `±${JOIN_TOL_MS}ms nearest`;
 
   constructor(track: HTMLCanvasElement, traces: HTMLCanvasElement) {
     this.track = track;
@@ -96,6 +154,12 @@ export class ReplayEngine {
   }
   setZoom(on: boolean) {
     this.zoom = on;
+  }
+  setTheme(t: Theme) {
+    this.palette = PALETTES[t];
+  }
+  setSpeedUnit(u: SpeedUnit) {
+    this.speedUnit = u;
   }
   destroy() {
     cancelAnimationFrame(this.raf);
@@ -147,14 +211,14 @@ export class ReplayEngine {
     ctx.closePath();
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.strokeStyle = "rgba(120,135,170,0.14)";
+    ctx.strokeStyle = this.palette.trackOuter;
     ctx.lineWidth = Math.max(9, W.s * 90);
     ctx.stroke();
-    ctx.strokeStyle = "rgba(150,168,205,0.28)";
+    ctx.strokeStyle = this.palette.trackInner;
     ctx.lineWidth = 1.3;
     ctx.stroke();
     const p0 = pts[0];
-    ctx.fillStyle = "rgba(233,237,246,0.6)";
+    ctx.fillStyle = this.palette.startDot;
     ctx.beginPath();
     ctx.arc(W.tx(p0), W.ty(p0), 3.2, 0, 7);
     ctx.fill();
@@ -164,7 +228,7 @@ export class ReplayEngine {
     const ctx = this.tctx;
     const d = this.model!.drivers[di];
     const s = d.samples;
-    const head = sampleAt(d, this.T);
+    const head = this.heads[di];
     const upto = indexAtT(s, Math.min(this.T, d.lapTime || Infinity));
     const start = Math.max(0, upto - 70);
     ctx.lineJoin = "round";
@@ -196,12 +260,39 @@ export class ReplayEngine {
     ctx.clearRect(0, 0, w, h);
     const m = this.model!;
     const L = m.trackLen;
+    const padL = 28; // left gutter for speed axis labels
+    const padB = 13; // bottom gutter for distance axis labels
+    const pw = w - padL;
+    const ph = h - padB;
+    const toDisplay = this.speedUnit === "mph" ? KPH_TO_MPH : 1;
+
+    ctx.font = "500 9px 'IBM Plex Mono', monospace";
+    ctx.fillStyle = this.palette.axisLabel;
+    ctx.strokeStyle = this.palette.axisGrid;
+    ctx.lineWidth = 1;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "right";
+    for (const f of [0, 0.25, 0.5, 0.75, 1]) {
+      const y = ph - f * ph;
+      ctx.beginPath();
+      ctx.moveTo(padL, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+      ctx.fillText(String(Math.round((f * VMAX * toDisplay) / 5) * 5), padL - 5, y);
+    }
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (const f of [0, 0.5, 1]) {
+      const x = padL + f * pw;
+      ctx.fillText((((f * L) / 1000).toFixed(1)) + " km", Math.min(w - 14, Math.max(padL + 14, x)), ph + 2);
+    }
+
     for (const d of m.drivers) {
       ctx.beginPath();
       for (let i = 0; i < d.samples.length; i++) {
         const p = d.samples[i];
-        const x = (p.d / L) * w;
-        const y = h - (Math.min(p.speed, VMAX) / VMAX) * h;
+        const x = padL + (p.d / L) * pw;
+        const y = ph - (Math.min(p.speed, VMAX) / VMAX) * ph;
         i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
       }
       ctx.strokeStyle = d.colour;
@@ -210,16 +301,17 @@ export class ReplayEngine {
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
-    const lead = m.drivers.reduce((a, b) =>
-      sampleAt(a, this.T).d >= sampleAt(b, this.T).d ? a : b
-    );
-    const dx = (sampleAt(lead, this.T).d / L) * w;
-    ctx.strokeStyle = "rgba(233,237,246,0.4)";
+    let leadIdx = 0;
+    for (let i = 1; i < m.drivers.length; i++) {
+      if (this.heads[i].d > this.heads[leadIdx].d) leadIdx = i;
+    }
+    const dx = padL + (this.heads[leadIdx].d / L) * pw;
+    ctx.strokeStyle = this.palette.leaderLine;
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
     ctx.moveTo(dx, 0);
-    ctx.lineTo(dx, h);
+    ctx.lineTo(dx, ph);
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -252,7 +344,7 @@ export class ReplayEngine {
   private drawZoom(W: ReturnType<ReplayEngine["worldT"]>) {
     const ctx = this.tctx;
     const m = this.model!;
-    const heads = m.drivers.map((d) => sampleAt(d, this.T));
+    const heads = this.heads;
     let cx = 0, cy = 0;
     for (const h of heads) {
       cx += h.x;
@@ -281,13 +373,13 @@ export class ReplayEngine {
     const bt = W.ty([0, cy + halfY]), bb = W.ty([0, minWy]);
     const rL = Math.min(bl, br), rT = Math.min(bt, bb), rWd = Math.abs(br - bl), rHt = Math.abs(bb - bt);
     ctx.save();
-    ctx.strokeStyle = "rgba(233,237,246,0.5)";
+    ctx.strokeStyle = this.palette.reticle;
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 3]);
     ctx.strokeRect(rL, rT, rWd, rHt);
     ctx.setLineDash([]);
     // connector lines pointing from the reticle to the inset
-    ctx.strokeStyle = "rgba(233,237,246,0.16)";
+    ctx.strokeStyle = this.palette.connector;
     ctx.beginPath();
     ctx.moveTo(rL + rWd, rT);
     ctx.lineTo(rx, ry);
@@ -300,7 +392,7 @@ export class ReplayEngine {
     ctx.save();
     this.rr(rx, ry, Zw, Zh, 8);
     ctx.clip();
-    ctx.fillStyle = "#0a0f18";
+    ctx.fillStyle = this.palette.zoomBg;
     ctx.fillRect(rx, ry, Zw, Zh);
     const pts = m.track;
     ctx.beginPath();
@@ -311,10 +403,10 @@ export class ReplayEngine {
     ctx.closePath();
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.strokeStyle = "rgba(120,135,170,0.16)";
+    ctx.strokeStyle = this.palette.zoomTrackOuter;
     ctx.lineWidth = Math.max(6, z * 90);
     ctx.stroke();
-    ctx.strokeStyle = "rgba(150,168,205,0.22)";
+    ctx.strokeStyle = this.palette.zoomTrackInner;
     ctx.lineWidth = 1;
     ctx.stroke();
     for (let i = 0; i < m.drivers.length; i++) {
@@ -341,7 +433,7 @@ export class ReplayEngine {
       ctx.fillStyle = d.colour;
       ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.fillStyle = "#e9edf6";
+      ctx.fillStyle = this.palette.zoomLabel;
       ctx.font = "600 11px 'Space Grotesk', sans-serif";
       ctx.fillText(d.code, ztx([h.x, h.y]) + 9, zty([h.x, h.y]) - 8);
     }
@@ -350,10 +442,10 @@ export class ReplayEngine {
     // inset border + label
     ctx.save();
     this.rr(rx, ry, Zw, Zh, 8);
-    ctx.strokeStyle = "rgba(150,168,205,0.3)";
+    ctx.strokeStyle = this.palette.zoomBorder;
     ctx.lineWidth = 1;
     ctx.stroke();
-    ctx.fillStyle = "rgba(124,134,156,0.9)";
+    ctx.fillStyle = this.palette.zoomBadge;
     ctx.font = "500 9px 'IBM Plex Mono', monospace";
     ctx.fillText("ZOOM ×" + (z / W.s).toFixed(1), rx + 8, ry + 13);
     ctx.restore();
@@ -362,14 +454,15 @@ export class ReplayEngine {
   private emit() {
     const m = this.model!;
     const T = this.T;
-    const drivers: DriverSnap[] = m.drivers.map((d) => {
-      const s = sampleAt(d, T);
+    const drivers: DriverSnap[] = m.drivers.map((d, i) => {
+      const s = this.heads[i];
       return {
         code: d.code,
         name: d.name,
         team: d.team,
         colour: d.colour,
         lapTime: d.lapTime,
+        speed: s.speed,
         throttle: s.throttle,
         brake: s.brake,
         gear: s.gear,
@@ -380,7 +473,7 @@ export class ReplayEngine {
     let delta: Snapshot["delta"] = null;
     if (m.drivers.length >= 2) {
       const [A, B] = m.drivers;
-      const sA = sampleAt(A, T), sB = sampleAt(B, T);
+      const [sA, sB] = this.heads;
       const leaderIsA = sA.d >= sB.d; // whoever is physically further along the lap
       const refD = leaderIsA ? sA.d : sB.d;
       const trailer = leaderIsA ? B : A;
@@ -412,10 +505,10 @@ export class ReplayEngine {
     if (this.playing) {
       this.T += dt * this.speed;
       if (this.T >= this.model.maxT) {
-        this.T = this.loop ? 0 : this.model.maxT;
-        if (!this.loop) this.playing = false;
+        this.T = 0;
       }
     }
+    this.heads = this.model.drivers.map((d) => sampleAt(d, this.T));
     this.render();
     this.fpsAcc += dt;
     this.fpsN++;

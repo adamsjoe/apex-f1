@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ReplayEngine, type Snapshot } from "@/lib/engine";
+import { ReplayEngine, VMAX, KPH_TO_MPH, type Snapshot, type Theme, type SpeedUnit } from "@/lib/engine";
 import type { Model } from "@/lib/types";
 
 export interface Stage {
@@ -9,6 +9,7 @@ export interface Stage {
   spinner: boolean;
   title: string;
   msg: string;
+  error?: boolean;
 }
 
 const CHECKS: [keyof ChecksState, string][] = [
@@ -36,7 +37,7 @@ function fmtLap(s: number) {
   return m + ":" + sec.toFixed(3).padStart(6, "0");
 }
 
-export default function Replay({ model, stage }: { model: Model | null; stage: Stage }) {
+export default function Replay({ model, stage, theme }: { model: Model | null; stage: Stage; theme: Theme }) {
   const trackRef = useRef<HTMLCanvasElement>(null);
   const tracesRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<ReplayEngine | null>(null);
@@ -44,6 +45,7 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [spi, setSpi] = useState(1);
   const [zoomOn, setZoomOn] = useState(true);
+  const [unit, setUnit] = useState<SpeedUnit>("kph");
 
   // mount engine once
   useEffect(() => {
@@ -77,6 +79,16 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
     if (model && engineRef.current) engineRef.current.setModel(model);
   }, [model]);
 
+  // theme
+  useEffect(() => {
+    engineRef.current?.setTheme(theme);
+  }, [theme]);
+
+  // speed unit (affects the trace chart's axis labels; the driver cards convert locally)
+  useEffect(() => {
+    engineRef.current?.setSpeedUnit(unit);
+  }, [unit]);
+
   // detect gear changes to retrigger the flash animation (via element key)
   const gearPrev = useRef<Record<string, number>>({});
   const [gearFlash, setGearFlash] = useState<Record<string, number>>({});
@@ -98,10 +110,10 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
 
   // self-check states derived from stage/model
   const checks: ChecksState = {
-    sessions: model || !stage.show ? "ok" : "wait",
+    sessions: model ? "ok" : "wait",
     drivers: model ? "ok" : "wait",
     laps: model ? "ok" : "wait",
-    telemetry: model ? "ok" : stage.spinner ? "wait" : "wait",
+    telemetry: model ? "ok" : stage.error ? "bad" : "wait",
     join: model ? "ok" : "wait",
   };
 
@@ -202,7 +214,13 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
 
           <div className="traceWrap" title="Speed of each driver across the lap, plotted by distance. Dashed line marks the current position.">
             <div className="h">
-              <span>Speed · km/h</span>
+              <button
+                className="unitToggle"
+                onClick={() => setUnit((u) => (u === "kph" ? "mph" : "kph"))}
+                title="Toggle km/h / mph"
+              >
+                Speed · {unit === "kph" ? "km/h" : "mph"}
+              </button>
               <span>by distance</span>
             </div>
             <canvas className="traces" ref={tracesRef} />
@@ -211,22 +229,40 @@ export default function Replay({ model, stage }: { model: Model | null; stage: S
           <div className="live">
             {snap?.drivers.map((d) => {
               const f = Math.max(0, Math.min(1, d.rpm / RPM_MAX));
+              const fs = Math.max(0, Math.min(1, d.speed / VMAX));
+              const shownSpeed = Math.round(unit === "mph" ? d.speed * KPH_TO_MPH : d.speed);
               return (
                 <div className="gauge" key={d.code} title={d.name}>
                   <div className="t" style={{ color: d.colour }}>{d.code}</div>
-                  <div className="revwrap" title={"RPM " + Math.round(d.rpm) + " · gear " + d.gear}>
-                    <svg viewBox="0 0 64 64">
-                      <g transform="rotate(135 32 32)">
-                        <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke="rgba(150,168,205,0.14)" strokeWidth="5" strokeDasharray="75 100" strokeLinecap="round" />
-                        <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke="rgba(255,77,77,0.55)" strokeWidth="5" strokeDasharray="9 100" strokeDashoffset={-66} strokeLinecap="round" />
-                        <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke={d.colour} strokeWidth="5" strokeDasharray={`${(75 * f).toFixed(2)} 100`} strokeLinecap="round" />
-                      </g>
-                    </svg>
-                    <div className="gearbig" key={d.code + "-" + (gearFlash[d.code] || 0)} style={{ color: d.colour }}>
-                      {d.gear}
+                  <div className="dials">
+                    <div className="dialUnit">
+                      <div className="dial" title={"RPM " + Math.round(d.rpm) + " · gear " + d.gear}>
+                        <svg viewBox="0 0 64 64">
+                          <g transform="rotate(135 32 32)">
+                            <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke="rgba(150,168,205,0.14)" strokeWidth="5" strokeDasharray="75 100" strokeLinecap="round" />
+                            <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke="rgba(255,77,77,0.55)" strokeWidth="5" strokeDasharray="9 100" strokeDashoffset={-66} strokeLinecap="round" />
+                            <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke={d.colour} strokeWidth="5" strokeDasharray={`${(75 * f).toFixed(2)} 100`} strokeLinecap="round" />
+                          </g>
+                        </svg>
+                        <div className="gearbig" key={d.code + "-" + (gearFlash[d.code] || 0)} style={{ color: d.colour }}>
+                          {d.gear}
+                        </div>
+                      </div>
+                      <div className="rpmnum">{Math.round(d.rpm).toLocaleString()} rpm</div>
+                    </div>
+                    <div className="dialUnit">
+                      <div className="dial" title={"Speed " + shownSpeed + " " + (unit === "mph" ? "mph" : "km/h")}>
+                        <svg viewBox="0 0 64 64">
+                          <g transform="rotate(135 32 32)">
+                            <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke="rgba(150,168,205,0.14)" strokeWidth="5" strokeDasharray="75 100" strokeLinecap="round" />
+                            <circle cx="32" cy="32" r="26" fill="none" pathLength={100} stroke={d.colour} strokeWidth="5" strokeDasharray={`${(75 * fs).toFixed(2)} 100`} strokeLinecap="round" />
+                          </g>
+                        </svg>
+                        <div className="speedBig">{shownSpeed}</div>
+                      </div>
+                      <div className="rpmnum">{unit === "mph" ? "mph" : "km/h"}</div>
                     </div>
                   </div>
-                  <div className="rpmnum">{Math.round(d.rpm).toLocaleString()} rpm</div>
                   <div className="barwrap" title="Throttle — percent of full throttle">
                     <span className="t">T</span>
                     <div className="bar"><i style={{ width: Math.round(d.throttle) + "%", background: d.colour }} /></div>
