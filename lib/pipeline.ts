@@ -57,6 +57,7 @@ export function buildDriverModel(
       t: (cp._t - t0) / 1000,
       x: lp.x,
       y: lp.y,
+      z: lp.z,
       d: 0,
       speed: cp.speed,
       throttle: cp.throttle,
@@ -81,22 +82,25 @@ export function finaliseModel(
 ): Model {
   const track = drivers
     .reduce((a, b) => (a.samples.length >= b.samples.length ? a : b))
-    .samples.map((p) => [p.x, p.y] as [number, number]);
+    .samples.map((p) => [p.x, p.y, p.z] as [number, number, number]);
 
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
   for (const d of drivers)
     for (const p of d.samples) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
       if (p.y < minY) minY = p.y;
       if (p.y > maxY) maxY = p.y;
+      if (p.z < minZ) minZ = p.z;
+      if (p.z > maxZ) maxZ = p.z;
     }
 
   const maxT = Math.max(
     ...drivers.map((d) => d.lapTime || d.samples[d.samples.length - 1].t)
   );
   const trackLen = Math.max(...drivers.map((d) => d.samples[d.samples.length - 1].d));
-  return { drivers, track, bounds: { minX, maxX, minY, maxY }, maxT, trackLen, sourceLabel, online };
+  return { drivers, track, bounds: { minX, maxX, minY, maxY, minZ, maxZ }, maxT, trackLen, sourceLabel, online };
 }
 
 export function fromOffline(s: OfflineSample): Model {
@@ -108,7 +112,7 @@ export function fromOffline(s: OfflineSample): Model {
     colour: s.driver.colour,
     lap: s.driver.lap,
     lapTime: s.driver.lapTime,
-    samples: s.samples,
+    samples: s.samples.map((p) => ({ ...p, z: 0 })),
     joined: s.samples.length,
     within: s.samples.length,
   };
@@ -150,6 +154,7 @@ export function sampleAt(d: DriverModel, t: number): SamplePt {
     t: tt,
     x: cm(p0.x, a.x, b.x, p3.x, f),
     y: cm(p0.y, a.y, b.y, p3.y, f),
+    z: cm(p0.z, a.z, b.z, p3.z, f),
     d: a.d + (b.d - a.d) * f,
     speed: a.speed + (b.speed - a.speed) * f,
     throttle: a.throttle + (b.throttle - a.throttle) * f,

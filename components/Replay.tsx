@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ReplayEngine, VMAX, KPH_TO_MPH, type Snapshot, type Theme, type SpeedUnit } from "@/lib/engine";
+import { ReplayEngine, VMAX, KPH_TO_MPH, type Snapshot, type Theme, type SpeedUnit, type ViewMode } from "@/lib/engine";
 import type { Model } from "@/lib/types";
 
 export interface Stage {
@@ -45,6 +45,7 @@ export default function Replay({ model, stage, theme }: { model: Model | null; s
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [spi, setSpi] = useState(1);
   const [zoomOn, setZoomOn] = useState(true);
+  const [viewMode, setViewMode] = useState<ViewMode>("flat");
   const [unit, setUnit] = useState<SpeedUnit>("kph");
 
   // mount engine once
@@ -123,9 +124,10 @@ export default function Replay({ model, stage, theme }: { model: Model | null; s
   return (
     <>
       <div className="main">
+        <div className="trackWrap">
         <canvas className="track" ref={trackRef} tabIndex={0} aria-label="Circuit with animated telemetry replay" />
 
-        <div className="hud" role="status" aria-live="off">
+        <div className="hud" data-corner={snap?.hudCorner ?? "tl"} role="status" aria-live="off">
           <div className="top">
             <span className="l">Data pipeline</span>
             <span className={"src " + (online ? "online" : "offline")}>
@@ -170,6 +172,7 @@ export default function Replay({ model, stage, theme }: { model: Model | null; s
             </div>
           </div>
         )}
+        </div>
 
         <div className="panel">
           <div className="drivers">
@@ -325,6 +328,18 @@ export default function Replay({ model, stage, theme }: { model: Model | null; s
           }}
         >
           {zoomOn ? "Zoom ✓" : "Zoom"}
+        </button>
+        <button
+          className="spd"
+          aria-label="Toggle isometric view"
+          title="Isometric view — tilts the track to show elevation changes"
+          onClick={() => {
+            const n: ViewMode = viewMode === "flat" ? "iso" : "flat";
+            setViewMode(n);
+            engine?.setViewMode(n);
+          }}
+        >
+          {viewMode === "iso" ? "Iso ✓" : "Iso"}
         </button>
         <button
           className="spd"

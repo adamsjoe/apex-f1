@@ -46,6 +46,7 @@ export interface Sample {
   t: number; // seconds from lap start
   x: number;
   y: number;
+  z: number; // elevation-like z from OpenF1 location (same raw units as x/y); 0 when unavailable
   d: number; // metres travelled
   speed: number;
   throttle: number;
@@ -70,8 +71,8 @@ export interface DriverModel extends DriverMeta {
 }
 export interface Model {
   drivers: DriverModel[];
-  track: [number, number][];
-  bounds: { minX: number; maxX: number; minY: number; maxY: number };
+  track: [number, number, number][];
+  bounds: { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number };
   maxT: number;
   trackLen: number;
   sourceLabel: string;
@@ -80,5 +81,5 @@ export interface Model {
 export interface OfflineSample {
   meta: { source: string; session_key: number; session: string; circuit: string; note: string };
   driver: { code: string; name: string; number: number; team: string; colour: string; lap: number; lapTime: number };
-  samples: Sample[];
+  samples: Omit<Sample, "z">[];
 }

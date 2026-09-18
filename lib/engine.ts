@@ -6,6 +6,14 @@ export const KPH_TO_MPH = 0.621371;
 
 export type Theme = "light" | "dark";
 export type SpeedUnit = "kph" | "mph";
+export type ViewMode = "flat" | "iso";
+export type Corner = "tl" | "tr" | "bl" | "br";
+
+const ISO_COS30 = Math.cos(Math.PI / 6);
+const ISO_SIN30 = Math.sin(Math.PI / 6);
+const ISO_RELIEF_FRACTION = 0.18; // full elevation range reads as ~18% of the larger planar span on screen
+const ISO_HEIGHT_SCALE_MIN = 2;
+const ISO_HEIGHT_SCALE_MAX = 30;
 
 interface Palette {
   trackOuter: string;
@@ -22,6 +30,7 @@ interface Palette {
   leaderLine: string;
   axisGrid: string;
   axisLabel: string;
+  isoGrid: string;
 }
 const PALETTES: Record<Theme, Palette> = {
   dark: {
@@ -39,6 +48,7 @@ const PALETTES: Record<Theme, Palette> = {
     leaderLine: "rgba(233,237,246,0.4)",
     axisGrid: "rgba(150,168,205,0.1)",
     axisLabel: "rgba(150,168,205,0.55)",
+    isoGrid: "rgba(150,168,205,0.16)",
   },
   light: {
     trackOuter: "rgba(60,72,110,0.10)",
@@ -55,6 +65,7 @@ const PALETTES: Record<Theme, Palette> = {
     leaderLine: "rgba(18,21,28,0.35)",
     axisGrid: "rgba(20,30,55,0.09)",
     axisLabel: "rgba(20,30,55,0.55)",
+    isoGrid: "rgba(20,30,55,0.14)",
   },
 };
 
@@ -83,9 +94,12 @@ export interface Snapshot {
   points: string;
   drivers: DriverSnap[];
   delta: { value: number; leader: string; level: boolean } | null;
+  hudCorner: Corner;
 }
 
-type Pt = [number, number];
+type Pt = [number, number, number];
+type Pt2 = [number, number];
+type Transform = { s: number; tx: (p: Pt) => number; ty: (p: Pt) => number };
 
 /**
  * Imperative render + playback loop. Kept out of React so the 60fps loop never
@@ -115,6 +129,11 @@ export class ReplayEngine {
   private heads: SamplePt[] = [];
   private palette = PALETTES.dark;
   private speedUnit: SpeedUnit = "kph";
+  private viewMode: ViewMode = "flat";
+  private isoBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
+  private heightScale = ISO_HEIGHT_SCALE_MIN;
+  private hudCorner: Corner = "tl";
+  private zoomCorner: Corner = "br";
   readonly join = `±${JOIN_TOL_MS}ms nearest`;
 
   constructor(track: HTMLCanvasElement, traces: HTMLCanvasElement) {
@@ -136,6 +155,8 @@ export class ReplayEngine {
     this.model = m;
     this.T = 0;
     this.playing = true;
+    this.computeIsoBounds();
+    this.computeOverlayCorners();
   }
   play() {
     if (this.model) this.playing = true;
@@ -161,6 +182,10 @@ export class ReplayEngine {
   setSpeedUnit(u: SpeedUnit) {
     this.speedUnit = u;
   }
+  setViewMode(mode: ViewMode) {
+    this.viewMode = mode;
+    this.computeOverlayCorners();
+  }
   destroy() {
     cancelAnimationFrame(this.raf);
     this.subs.clear();
@@ -175,6 +200,7 @@ export class ReplayEngine {
       this.track.width = tw * this.dpr;
       this.track.height = th * this.dpr;
       this.tctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      this.computeOverlayCorners();
     }
     const xw = this.traces.clientWidth, xh = this.traces.clientHeight;
     if (this.traces.width !== xw * this.dpr || this.traces.height !== xh * this.dpr) {
@@ -184,15 +210,20 @@ export class ReplayEngine {
     }
   }
 
-  private worldT() {
-    const b = this.model!.bounds;
+  private fitTransform(minX: number, maxX: number, minY: number, maxY: number) {
     const pad = Math.min(this.TW, this.TH) * 0.1;
     const s = Math.min(
-      (this.TW - 2 * pad) / ((b.maxX - b.minX) || 1),
-      (this.TH - 2 * pad) / ((b.maxY - b.minY) || 1)
+      (this.TW - 2 * pad) / ((maxX - minX) || 1),
+      (this.TH - 2 * pad) / ((maxY - minY) || 1)
     );
-    const ox = (this.TW - (b.maxX - b.minX) * s) / 2;
-    const oy = (this.TH - (b.maxY - b.minY) * s) / 2;
+    const ox = (this.TW - (maxX - minX) * s) / 2;
+    const oy = (this.TH - (maxY - minY) * s) / 2;
+    return { s, ox, oy };
+  }
+
+  private worldT(): Transform {
+    const b = this.model!.bounds;
+    const { s, ox, oy } = this.fitTransform(b.minX, b.maxX, b.minY, b.maxY);
     return {
       s,
       tx: (p: Pt) => ox + (p[0] - b.minX) * s,
@@ -200,7 +231,123 @@ export class ReplayEngine {
     };
   }
 
-  private drawTrack(W: ReturnType<ReplayEngine["worldT"]>) {
+  private isoProject(x: number, y: number, z: number): Pt2 {
+    return [(x - y) * ISO_COS30, (x + y) * ISO_SIN30 + z * this.heightScale];
+  }
+
+  private isoHeightScale(): number {
+    const b = this.model!.bounds;
+    const planarSpan = Math.max(b.maxX - b.minX, b.maxY - b.minY, 1);
+    const zSpan = Math.max(b.maxZ - b.minZ, 1e-6);
+    return Math.min(ISO_HEIGHT_SCALE_MAX, Math.max(ISO_HEIGHT_SCALE_MIN, (planarSpan * ISO_RELIEF_FRACTION) / zSpan));
+  }
+
+  private computeIsoBounds() {
+    if (!this.model) return;
+    this.heightScale = this.isoHeightScale();
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const d of this.model.drivers)
+      for (const p of d.samples) {
+        const [ix, iy] = this.isoProject(p.x, p.y, p.z);
+        if (ix < minX) minX = ix;
+        if (ix > maxX) maxX = ix;
+        if (iy < minY) minY = iy;
+        if (iy > maxY) maxY = iy;
+      }
+    this.isoBounds = { minX, maxX, minY, maxY };
+  }
+
+  /** Picks the least track-covered canvas quadrant for the HUD panel, and the
+   * next-least-covered one for the zoom inset, so neither overlay sits on top
+   * of the circuit outline regardless of track shape, aspect ratio, or view mode. */
+  private computeOverlayCorners() {
+    if (!this.model || !this.TW || !this.TH) return;
+    const W = this.viewMode === "iso" ? this.isoT() : this.worldT();
+    const counts: Record<Corner, number> = { tl: 0, tr: 0, bl: 0, br: 0 };
+    for (const p of this.model.track) {
+      const x = W.tx(p), y = W.ty(p);
+      const top = y < this.TH / 2, left = x < this.TW / 2;
+      counts[top ? (left ? "tl" : "tr") : left ? "bl" : "br"]++;
+    }
+    const order = (Object.keys(counts) as Corner[]).sort((a, b) => counts[a] - counts[b]);
+    this.hudCorner = order[0];
+    this.zoomCorner = order[1];
+  }
+
+  private isoT(): Transform {
+    const b = this.isoBounds!;
+    const { s, ox, oy } = this.fitTransform(b.minX, b.maxX, b.minY, b.maxY);
+    return {
+      s,
+      tx: (p: Pt) => ox + (this.isoProject(p[0], p[1], p[2])[0] - b.minX) * s,
+      ty: (p: Pt) => this.TH - (oy + (this.isoProject(p[0], p[1], p[2])[1] - b.minY) * s),
+    };
+  }
+
+  private drawGroundGrid(W: Transform) {
+    const ctx = this.tctx;
+    const b = this.model!.bounds;
+    const groundZ = b.minZ; // circuit's own lowest recorded point — OpenF1's z origin is arbitrary, so literal 0 isn't meaningful
+    const padX = (b.maxX - b.minX) * 0.15 || 100;
+    const padY = (b.maxY - b.minY) * 0.15 || 100;
+    const x0 = b.minX - padX, x1 = b.maxX + padX;
+    const y0 = b.minY - padY, y1 = b.maxY + padY;
+    const DIVS = 12;
+    ctx.save();
+    ctx.strokeStyle = this.palette.isoGrid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= DIVS; i++) {
+      const x = x0 + ((x1 - x0) * i) / DIVS;
+      ctx.moveTo(W.tx([x, y0, groundZ]), W.ty([x, y0, groundZ]));
+      ctx.lineTo(W.tx([x, y1, groundZ]), W.ty([x, y1, groundZ]));
+    }
+    for (let i = 0; i <= DIVS; i++) {
+      const y = y0 + ((y1 - y0) * i) / DIVS;
+      ctx.moveTo(W.tx([x0, y, groundZ]), W.ty([x0, y, groundZ]));
+      ctx.lineTo(W.tx([x1, y, groundZ]), W.ty([x1, y, groundZ]));
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** Vertical drop-lines from the track down to the ground plane at regular
+   * intervals — pins the elevated line to the grid so height actually reads,
+   * rather than relying on the eye to judge offset from a distant floor. */
+  private drawElevationPillars(W: Transform) {
+    const ctx = this.tctx;
+    const track = this.model!.track;
+    const groundZ = this.model!.bounds.minZ;
+    const DESIRED = 28;
+    const step = Math.max(1, Math.round(track.length / DESIRED));
+    ctx.save();
+    ctx.strokeStyle = this.palette.isoGrid;
+    ctx.fillStyle = this.palette.isoGrid;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    for (let i = 0; i < track.length; i += step) {
+      const [x, y, zTop] = track[i];
+      if (zTop - groundZ < 1e-6) continue; // already on the ground, no pillar needed
+      const topX = W.tx([x, y, zTop]), topY = W.ty([x, y, zTop]);
+      const botX = W.tx([x, y, groundZ]), botY = W.ty([x, y, groundZ]);
+      ctx.moveTo(topX, topY);
+      ctx.lineTo(botX, botY);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (let i = 0; i < track.length; i += step) {
+      const [x, y, zTop] = track[i];
+      if (zTop - groundZ < 1e-6) continue;
+      const botX = W.tx([x, y, groundZ]), botY = W.ty([x, y, groundZ]);
+      ctx.beginPath();
+      ctx.arc(botX, botY, 1.6, 0, 7);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  private drawTrack(W: Transform) {
     const ctx = this.tctx;
     const pts = this.model!.track;
     ctx.beginPath();
@@ -224,7 +371,7 @@ export class ReplayEngine {
     ctx.fill();
   }
 
-  private drawGhost(W: ReturnType<ReplayEngine["worldT"]>, di: number) {
+  private drawGhost(W: Transform, di: number) {
     const ctx = this.tctx;
     const d = this.model!.drivers[di];
     const s = d.samples;
@@ -235,10 +382,10 @@ export class ReplayEngine {
     ctx.lineCap = "round";
     ctx.beginPath();
     for (let i = start; i <= upto; i++) {
-      const x = W.tx([s[i].x, s[i].y]), y = W.ty([s[i].x, s[i].y]);
+      const x = W.tx([s[i].x, s[i].y, s[i].z]), y = W.ty([s[i].x, s[i].y, s[i].z]);
       i === start ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
     }
-    ctx.lineTo(W.tx([head.x, head.y]), W.ty([head.x, head.y]));
+    ctx.lineTo(W.tx([head.x, head.y, head.z]), W.ty([head.x, head.y, head.z]));
     ctx.strokeStyle = d.colour;
     ctx.globalAlpha = 0.5;
     ctx.lineWidth = 2.4;
@@ -248,7 +395,7 @@ export class ReplayEngine {
     ctx.globalAlpha = 1;
     ctx.shadowBlur = 16;
     ctx.beginPath();
-    ctx.arc(W.tx([head.x, head.y]), W.ty([head.x, head.y]), 4.4, 0, 7);
+    ctx.arc(W.tx([head.x, head.y, head.z]), W.ty([head.x, head.y, head.z]), 4.4, 0, 7);
     ctx.fillStyle = d.colour;
     ctx.fill();
     ctx.shadowBlur = 0;
@@ -318,7 +465,11 @@ export class ReplayEngine {
 
   private render() {
     this.tctx.clearRect(0, 0, this.TW, this.TH);
-    const W = this.worldT();
+    const W = this.viewMode === "iso" ? this.isoT() : this.worldT();
+    if (this.viewMode === "iso") {
+      this.drawGroundGrid(W);
+      this.drawElevationPillars(W);
+    }
     this.drawTrack(W);
     for (let i = 0; i < this.model!.drivers.length; i++) this.drawGhost(W, i);
     this.drawTraces();
@@ -341,17 +492,19 @@ export class ReplayEngine {
     }
   }
 
-  private drawZoom(W: ReturnType<ReplayEngine["worldT"]>) {
+  private drawZoom(W: Transform) {
     const ctx = this.tctx;
     const m = this.model!;
     const heads = this.heads;
-    let cx = 0, cy = 0;
+    let cx = 0, cy = 0, cz = 0;
     for (const h of heads) {
       cx += h.x;
       cy += h.y;
+      cz += h.z;
     }
     cx /= heads.length;
     cy /= heads.length;
+    cz /= heads.length;
     const gap = heads.length >= 2 ? Math.hypot(heads[0].x - heads[1].x, heads[0].y - heads[1].y) : 0;
     const bw = m.bounds.maxX - m.bounds.minX;
     const spanWorld = Math.max(gap * 2.8, bw * 0.12, 300); // world units (~1/10 m); floor ~30 m
@@ -359,32 +512,46 @@ export class ReplayEngine {
     const pad = 14;
     const Zw = Math.min(this.TW, this.TH) * 0.36;
     const Zh = Zw * 0.7;
-    const rx = this.TW - Zw - pad;
-    const ry = this.TH - Zh - pad;
+    const onRight = this.zoomCorner === "tr" || this.zoomCorner === "br";
+    const onBottom = this.zoomCorner === "bl" || this.zoomCorner === "br";
+    const rx = onRight ? this.TW - Zw - pad : pad;
+    const ry = onBottom ? this.TH - Zh - pad : pad;
     const z = Zw / spanWorld;
     const halfX = spanWorld / 2;
     const halfY = (Zh / Zw) * spanWorld / 2;
     const minWx = cx - halfX, minWy = cy - halfY;
-    const ztx = (p: Pt) => rx + (p[0] - minWx) * z;
-    const zty = (p: Pt) => ry + Zh - (p[1] - minWy) * z;
+    const ztx = (p: Pt2) => rx + (p[0] - minWx) * z;
+    const zty = (p: Pt2) => ry + Zh - (p[1] - minWy) * z;
 
-    // reticle on the main view (the world region being magnified)
-    const bl = W.tx([minWx, 0]), br = W.tx([cx + halfX, 0]);
-    const bt = W.ty([0, cy + halfY]), bb = W.ty([0, minWy]);
-    const rL = Math.min(bl, br), rT = Math.min(bt, bb), rWd = Math.abs(br - bl), rHt = Math.abs(bb - bt);
+    // reticle on the main view (the world region being magnified) — a 4-corner
+    // polygon rather than an axis-aligned rect, since W may be the rotated iso
+    // transform; corners are anchored near the cars' current elevation.
+    const corners: Pt[] = [
+      [minWx, cy + halfY, cz],
+      [cx + halfX, cy + halfY, cz],
+      [cx + halfX, minWy, cz],
+      [minWx, minWy, cz],
+    ];
+    const proj = corners.map((c) => [W.tx(c), W.ty(c)] as Pt2);
     ctx.save();
     ctx.strokeStyle = this.palette.reticle;
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 3]);
-    ctx.strokeRect(rL, rT, rWd, rHt);
+    ctx.beginPath();
+    proj.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+    ctx.closePath();
+    ctx.stroke();
     ctx.setLineDash([]);
-    // connector lines pointing from the reticle to the inset
+    // connector lines pointing from the reticle to the inset — anchor from
+    // whichever pair of reticle corners actually faces the inset's near edge.
+    const [nearA, nearB] = onRight ? [proj[1], proj[2]] : [proj[0], proj[3]];
+    const nearX = onRight ? rx : rx + Zw;
     ctx.strokeStyle = this.palette.connector;
     ctx.beginPath();
-    ctx.moveTo(rL + rWd, rT);
-    ctx.lineTo(rx, ry);
-    ctx.moveTo(rL + rWd, rT + rHt);
-    ctx.lineTo(rx, ry + Zh);
+    ctx.moveTo(nearA[0], nearA[1]);
+    ctx.lineTo(nearX, ry);
+    ctx.moveTo(nearB[0], nearB[1]);
+    ctx.lineTo(nearX, ry + Zh);
     ctx.stroke();
     ctx.restore();
 
@@ -397,7 +564,7 @@ export class ReplayEngine {
     const pts = m.track;
     ctx.beginPath();
     for (let i = 0; i < pts.length; i++) {
-      const x = ztx(pts[i]), y = zty(pts[i]);
+      const x = ztx([pts[i][0], pts[i][1]]), y = zty([pts[i][0], pts[i][1]]);
       i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
     }
     ctx.closePath();
@@ -492,6 +659,7 @@ export class ReplayEngine {
       points: m.drivers.map((d) => d.samples.length).join(" / "),
       drivers,
       delta,
+      hudCorner: this.hudCorner,
     };
     this.subs.forEach((cb) => cb(snap));
   }

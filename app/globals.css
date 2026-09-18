@@ -40,6 +40,7 @@ select:focus-visible { outline: none; border-color: rgba(92, 225, 182, 0.5); }
 .themeToggle svg { width: 16px; height: 16px; }
 
 .main { position: relative; display: grid; grid-template-columns: 1fr clamp(320px, 20vw, 460px); min-height: 0; }
+.trackWrap { position: relative; min-width: 0; min-height: 0; }
 .track { display: block; width: 100%; height: 100%; background: radial-gradient(120% 90% at 50% 0%, var(--trackA) 0%, var(--trackB) 70%); }
 .panel { border-left: 1px solid var(--line); padding: 16px 16px 10px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; background: var(--bg); }
 
@@ -85,7 +86,11 @@ select:focus-visible { outline: none; border-color: rgba(92, 225, 182, 0.5); }
 .speedBig { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--mono); font-weight: 600; font-size: clamp(13px, 0.85vw, 16px); font-variant-numeric: tabular-nums; }
 .rpmnum { text-align: center; font-family: var(--mono); font-size: clamp(9.5px, 0.5vw, 11px); color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 3px; }
 
-.hud { position: absolute; left: clamp(12px, 2vw, 22px); top: clamp(12px, 2vw, 22px); width: clamp(270px, 15vw, 400px); max-width: 78vw; background: var(--panel); border: 1px solid var(--line); border-radius: 11px; backdrop-filter: blur(13px); -webkit-backdrop-filter: blur(13px); padding: 12px 13px; font-family: var(--mono); pointer-events: none; }
+.hud { position: absolute; width: clamp(270px, 15vw, 400px); max-width: 78vw; background: var(--panel); border: 1px solid var(--line); border-radius: 11px; backdrop-filter: blur(13px); -webkit-backdrop-filter: blur(13px); padding: 12px 13px; font-family: var(--mono); pointer-events: none; transition: left 0.35s ease, top 0.35s ease, right 0.35s ease, bottom 0.35s ease; }
+.hud[data-corner="tl"] { left: clamp(12px, 2vw, 22px); top: clamp(12px, 2vw, 22px); }
+.hud[data-corner="tr"] { right: clamp(12px, 2vw, 22px); top: clamp(12px, 2vw, 22px); }
+.hud[data-corner="bl"] { left: clamp(12px, 2vw, 22px); bottom: clamp(12px, 2vw, 22px); }
+.hud[data-corner="br"] { right: clamp(12px, 2vw, 22px); bottom: clamp(12px, 2vw, 22px); }
 .hud .top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 9px; }
 .hud .top .l { font-family: var(--sans); font-size: clamp(11.5px, 0.65vw, 14px); color: var(--muted); }
 .src { display: inline-flex; align-items: center; gap: 6px; font-family: var(--sans); font-size: clamp(10px, 0.55vw, 12px); letter-spacing: 0.05em; }
