@@ -46,6 +46,7 @@ select:focus-visible { outline: none; border-color: rgba(92, 225, 182, 0.5); }
 
 .drivers { display: grid; gap: 8px; }
 .drv { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); }
+.drv .pos { font-family: var(--mono); font-size: clamp(11px, 0.65vw, 13px); color: var(--muted); width: 1.6em; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
 .drv .swatch { width: 11px; height: 11px; border-radius: 50%; flex: none; box-shadow: 0 0 10px currentColor; }
 .dmeta { flex: 1; min-width: 0; }
 .dtop { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
