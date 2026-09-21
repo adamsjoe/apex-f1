@@ -2,17 +2,32 @@
 
 import { useEffect, useState } from "react";
 import { getSessions, getDrivers, getLaps, getCarData, getLocation } from "@/lib/openf1";
-import { fastestLap, buildDriverModel, finaliseModel, fromOffline } from "@/lib/pipeline";
+import { firstLap, buildDriverModel, finaliseModel, fromOffline } from "@/lib/pipeline";
 import { OFFLINE_SAMPLE } from "@/lib/sample";
 import type { Model, DriverMeta, DriverModel, Of1Session, Of1Driver } from "@/lib/types";
 
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let idx = 0;
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 interface Props {
-  onLoading: () => void;
+  onLoading: (mode: "compare" | "field") => void;
   onModel: (m: Model) => void;
   onError: (title: string, msg: string) => void;
 }
 
 const FIRST_YEAR = 2023; // OpenF1 data starts here
+const FIELD_CONCURRENCY = 1; // OpenF1 429s hard on *any* concurrent requests — fetch strictly one at a time
+const MIN_SAMPLES = 20;
 
 function metaOf(d: Of1Driver): DriverMeta {
   return {
@@ -40,6 +55,7 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
   const [b, setB] = useState<string>("");
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<"compare" | "field" | "demo">("compare");
 
   // year -> sessions
   useEffect(() => {
@@ -104,20 +120,21 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
 
   async function compare() {
     if (a === b) {
-      onError("Pick two different drivers", "Choose two distinct drivers to compare their fastest laps.");
+      onError("Pick two different drivers", "Choose two distinct drivers to compare their opening lap.");
       return;
     }
     const mA = drivers.find((d) => String(d.driver_number) === a);
     const mB = drivers.find((d) => String(d.driver_number) === b);
     if (!mA || !mB) return;
+    setMode("compare");
     setBusy(true);
-    onLoading();
+    onLoading("compare");
     try {
       const laps = await getLaps(sessionKey);
       const built: DriverModel[] = [];
       for (const dm of [metaOf(mA), metaOf(mB)]) {
-        const best = fastestLap(laps, dm.number);
-        if (!best) throw new Error(`No timed lap found for ${dm.code}`);
+        const best = firstLap(laps, dm.number);
+        if (!best) throw new Error(`No timed first lap found for ${dm.code}`);
         const t0 = Date.parse(best.date_start!);
         const t1 = t0 + best.lap_duration! * 1000;
         const iso0 = new Date(t0 - 300).toISOString();
@@ -127,7 +144,7 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
           getLocation(sessionKey, dm.number, iso0, iso1),
         ]);
         const model = buildDriverModel(car, loc, best, dm);
-        if (model.samples.length < 20) throw new Error(`Sparse telemetry for ${dm.code}`);
+        if (model.samples.length < MIN_SAMPLES) throw new Error(`Sparse telemetry for ${dm.code}`);
         built.push(model);
       }
       // Teammates share a team colour, and some sessions have none — force distinct hues.
@@ -137,7 +154,7 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
       }
       const sess = sessions.find((s) => String(s.session_key) === sessionKey);
       const label = sess ? `${sess.circuit_short_name} · ${sess.session_name} · ${year}` : `session ${sessionKey}`;
-      onModel(finaliseModel(built, `OpenF1 · ${label} · session ${sessionKey}`, true));
+      onModel(finaliseModel(built, `OpenF1 · ${label} · Lap 1 · session ${sessionKey}`, true));
     } catch (e) {
       onError(
         "Couldn't build the matchup",
@@ -149,14 +166,66 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
     }
   }
 
+  async function loadField() {
+    if (!drivers.length) return;
+    const sess = sessions.find((s) => String(s.session_key) === sessionKey);
+    if (!sess) return;
+    if (sess.session_name !== "Race") {
+      onError("Race sessions only", "All drivers replays only Race sessions — the field doesn't start together in Practice/Qualifying/Sprint.");
+      return;
+    }
+    setMode("field");
+    setBusy(true);
+    onLoading("field");
+    try {
+      const laps = await getLaps(sessionKey);
+      // Each driver's own first timed lap, not a fixed clock window — so the
+      // replay covers everyone's actual lap 1 in full, however long it took.
+      const firsts = drivers
+        .map((d) => ({ dm: metaOf(d), lap: firstLap(laps, d.driver_number) }))
+        .filter((x): x is { dm: DriverMeta; lap: NonNullable<ReturnType<typeof firstLap>> } => x.lap !== null);
+      if (!firsts.length) throw new Error("No driver in this session has a timed first lap");
+      const t0Ms = Math.min(...firsts.map((x) => Date.parse(x.lap.date_start!)));
+      const endMs = Math.max(...firsts.map((x) => Date.parse(x.lap.date_start!) + x.lap.lap_duration! * 1000));
+      const iso0 = new Date(t0Ms - 300).toISOString();
+      const iso1 = new Date(endMs + 300).toISOString();
+      const results = await mapLimit(firsts, FIELD_CONCURRENCY, async ({ dm }) => {
+        try {
+          // Sequential, not Promise.all: OpenF1 429s aggressively on *any*
+          // simultaneous requests, so we never want more than one in flight.
+          const car = await getCarData(sessionKey, dm.number, iso0, iso1);
+          const loc = await getLocation(sessionKey, dm.number, iso0, iso1);
+          const model = buildDriverModel(car, loc, null, dm, t0Ms);
+          return model.samples.length < MIN_SAMPLES ? null : model;
+        } catch {
+          return null;
+        }
+      });
+      const built = results.filter((m): m is DriverModel => m !== null);
+      if (!built.length) throw new Error("No usable telemetry for any driver's first lap");
+      const label = `${sess.circuit_short_name} · ${sess.session_name} · ${year}`;
+      onModel(finaliseModel(built, `OpenF1 · ${label} · Lap 1 · all drivers`, true));
+    } catch (e) {
+      onError(
+        "Couldn't build the field replay",
+        (e instanceof Error ? e.message : "Fetch failed") + ". Try a different (busier) session, or retry."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function demo() {
+    setMode("demo");
     onModel(fromOffline(OFFLINE_SAMPLE));
   }
+
+  const isRaceSession = sessions.find((s) => String(s.session_key) === sessionKey)?.session_name === "Race";
 
   return (
     <div className="picker">
       <div className="sel">
-        <select aria-label="Year" title="Season" value={year} onChange={(e) => setYear(Number(e.target.value))}>
+        <select aria-label="Year" title="Season" value={year} disabled={mode === "demo"} onChange={(e) => setYear(Number(e.target.value))}>
           {years.map((y) => (
             <option key={y} value={y}>
               {y}
@@ -169,7 +238,7 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
           aria-label="Session"
           title="Event / session"
           value={sessionKey}
-          disabled={loadingSessions || !sessions.length}
+          disabled={mode === "demo" || loadingSessions || !sessions.length}
           onChange={(e) => setSessionKey(e.target.value)}
         >
           {loadingSessions && <option>Loading…</option>}
@@ -182,7 +251,7 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
         </select>
       </div>
       <div className="sel">
-        <select aria-label="Driver one" title="First driver" value={a} disabled={!drivers.length} onChange={(e) => setA(e.target.value)}>
+        <select aria-label="Driver one" title="First driver" value={a} disabled={mode === "demo" || !drivers.length} onChange={(e) => setA(e.target.value)}>
           {drivers.map((d) => (
             <option key={d.driver_number} value={d.driver_number}>
               {(d.name_acronym || d.driver_number) + " · " + (d.full_name || "")}
@@ -191,7 +260,7 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
         </select>
       </div>
       <div className="sel">
-        <select aria-label="Driver two" title="Second driver" value={b} disabled={!drivers.length} onChange={(e) => setB(e.target.value)}>
+        <select aria-label="Driver two" title="Second driver" value={b} disabled={mode === "demo" || !drivers.length} onChange={(e) => setB(e.target.value)}>
           {drivers.map((d) => (
             <option key={d.driver_number} value={d.driver_number}>
               {(d.name_acronym || d.driver_number) + " · " + (d.full_name || "")}
@@ -199,10 +268,22 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
           ))}
         </select>
       </div>
-      <button className="btn primary" disabled={!drivers.length || busy} onClick={compare}>
-        {busy ? "Loading…" : "Compare"}
+      <button className={"btn " + (mode === "compare" ? "primary" : "ghost")} disabled={!drivers.length || busy} onClick={compare}>
+        {busy && mode === "compare" ? "Loading…" : "Compare"}
       </button>
-      <button className="btn ghost" onClick={demo}>
+      <button
+        className={"btn " + (mode === "field" ? "primary" : "ghost")}
+        disabled={!drivers.length || busy || !isRaceSession}
+        onClick={loadField}
+        title={
+          isRaceSession
+            ? "Replay Lap 1 with every driver on track"
+            : "Only available for Race sessions — the field doesn't start together in Practice/Qualifying/Sprint"
+        }
+      >
+        {busy && mode === "field" ? "Loading…" : "All drivers"}
+      </button>
+      <button className={"btn " + (mode === "demo" ? "primary" : "ghost")} onClick={demo}>
         Offline demo
       </button>
     </div>

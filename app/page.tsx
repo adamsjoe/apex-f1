@@ -12,7 +12,7 @@ const IDLE: Stage = {
   show: true,
   spinner: false,
   title: "Pick a matchup",
-  msg: "Choose a session and two drivers, then Compare — the app pulls each driver's fastest lap from OpenF1 and races them as ghosts. Or hit Offline demo to see it run on a bundled real lap.",
+  msg: "Choose a session and two drivers, then Compare — the app pulls each driver's opening lap (Lap 1) from OpenF1 and races them as ghosts. Or hit All drivers for the whole field's Lap 1, or Offline demo to see it run on a bundled real lap.",
 };
 
 export default function Home() {
@@ -40,11 +40,15 @@ export default function Home() {
     <div id="app">
       <div className="topbar">
         <div className="wordmark">
-          Apex<span>F1 telemetry — fastest-lap head-to-head</span>
+          Apex<span>F1 telemetry — Lap 1 head-to-head</span>
         </div>
         <Picker
-          onLoading={() =>
-            setStage({ show: true, spinner: true, title: "Loading matchup", msg: "Fetching laps and telemetry from OpenF1…" })
+          onLoading={(mode) =>
+            setStage(
+              mode === "field"
+                ? { show: true, spinner: true, title: "Loading field", msg: "Fetching Lap 1 telemetry for every driver from OpenF1…" }
+                : { show: true, spinner: true, title: "Loading matchup", msg: "Fetching Lap 1 telemetry from OpenF1…" }
+            )
           }
           onModel={(m) => {
             setStage((s) => ({ ...s, show: false }));

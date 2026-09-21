@@ -70,6 +70,7 @@ const PALETTES: Record<Theme, Palette> = {
 };
 
 export interface DriverSnap {
+  position: number;
   code: string;
   name: string;
   team: string;
@@ -473,7 +474,9 @@ export class ReplayEngine {
     this.drawTrack(W);
     for (let i = 0; i < this.model!.drivers.length; i++) this.drawGhost(W, i);
     this.drawTraces();
-    if (this.zoom && this.model!.drivers.length) this.drawZoom(W);
+    // The inset is a close-up on a specific car or duel; it doesn't generalise
+    // to a full field, so it's only ever drawn for 1 (offline demo) or 2 (duel) drivers.
+    if (this.zoom && this.model!.drivers.length && this.model!.drivers.length <= 2) this.drawZoom(W);
   }
 
   private rr(x: number, y: number, w: number, h: number, r: number) {
@@ -497,21 +500,31 @@ export class ReplayEngine {
     const m = this.model!;
     const heads = this.heads;
     let cx = 0, cy = 0, cz = 0;
+    let minHX = Infinity, maxHX = -Infinity, minHY = Infinity, maxHY = -Infinity;
     for (const h of heads) {
       cx += h.x;
       cy += h.y;
       cz += h.z;
+      if (h.x < minHX) minHX = h.x;
+      if (h.x > maxHX) maxHX = h.x;
+      if (h.y < minHY) minHY = h.y;
+      if (h.y > maxHY) maxHY = h.y;
     }
     cx /= heads.length;
     cy /= heads.length;
     cz /= heads.length;
-    const gap = heads.length >= 2 ? Math.hypot(heads[0].x - heads[1].x, heads[0].y - heads[1].y) : 0;
+    // Spread across every visible car (not just a pairwise gap) so the inset
+    // frames the whole field, not just two arbitrary cars — but once the field
+    // is too spread out to fit in an actual close-up, stop trying: a "zoom"
+    // that goes below the main view's own scale (i.e. zooms OUT) is broken,
+    // so cap the span and just centre on the pack at the main view's scale.
+    const spread = Math.max(maxHX - minHX, maxHY - minHY, 0);
     const bw = m.bounds.maxX - m.bounds.minX;
-    const spanWorld = Math.max(gap * 2.8, bw * 0.12, 300); // world units (~1/10 m); floor ~30 m
-
     const pad = 14;
     const Zw = Math.min(this.TW, this.TH) * 0.36;
     const Zh = Zw * 0.7;
+    const maxSpanWorld = Zw / W.s; // span that would give exactly 1x (== main view) zoom
+    const spanWorld = Math.min(Math.max(spread * 1.3, bw * 0.12, 300), maxSpanWorld);
     const onRight = this.zoomCorner === "tr" || this.zoomCorner === "br";
     const onBottom = this.zoomCorner === "bl" || this.zoomCorner === "br";
     const rx = onRight ? this.TW - Zw - pad : pad;
@@ -621,9 +634,18 @@ export class ReplayEngine {
   private emit() {
     const m = this.model!;
     const T = this.T;
-    const drivers: DriverSnap[] = m.drivers.map((d, i) => {
+    // Race position = who's travelled furthest along the (single-lap) track
+    // right now — re-sorting live means an overtake visibly reorders the list.
+    // Only for field mode (>2 drivers); Compare's 2-driver order stays as picked.
+    const order =
+      m.drivers.length > 2
+        ? m.drivers.map((_, i) => i).sort((a, b) => this.heads[b].d - this.heads[a].d)
+        : m.drivers.map((_, i) => i);
+    const drivers: DriverSnap[] = order.map((i, rank) => {
+      const d = m.drivers[i];
       const s = this.heads[i];
       return {
+        position: rank + 1,
         code: d.code,
         name: d.name,
         team: d.team,
@@ -638,7 +660,7 @@ export class ReplayEngine {
       };
     });
     let delta: Snapshot["delta"] = null;
-    if (m.drivers.length >= 2) {
+    if (m.drivers.length === 2) {
       const [A, B] = m.drivers;
       const [sA, sB] = this.heads;
       const leaderIsA = sA.d >= sB.d; // whoever is physically further along the lap

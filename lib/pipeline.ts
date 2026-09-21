@@ -11,8 +11,11 @@ import type {
 
 export const JOIN_TOL_MS = 500;
 
-/** Fastest timed, non-pit-out lap for a driver, or null. */
-export function fastestLap(laps: Of1Lap[], driverNumber: number): Of1Lap | null {
+/** A driver's earliest timed, non-pit-out lap, or null. Lap 1 is frequently an
+ * out-lap with no recorded duration (especially in Practice/Qualifying), so
+ * this is "the first lap that actually has telemetry worth showing", which is
+ * usually — but not always — lap number 1. */
+export function firstLap(laps: Of1Lap[], driverNumber: number): Of1Lap | null {
   const valid = laps.filter(
     (l) =>
       l.driver_number === driverNumber &&
@@ -21,15 +24,16 @@ export function fastestLap(laps: Of1Lap[], driverNumber: number): Of1Lap | null 
       !l.is_pit_out_lap
   );
   if (!valid.length) return null;
-  return valid.reduce((a, b) => (a.lap_duration! < b.lap_duration! ? a : b));
+  return valid.reduce((a, b) => (a.lap_number < b.lap_number ? a : b));
 }
 
 /** Join location (X/Y) onto car_data by nearest timestamp, then compute distance. */
 export function buildDriverModel(
   car: Of1Car[],
   loc: Of1Loc[],
-  lap: Of1Lap,
-  meta: DriverMeta
+  lap: Of1Lap | null,
+  meta: DriverMeta,
+  originMs?: number
 ): DriverModel {
   const c = car
     .map((p) => ({ ...p, _t: Date.parse(p.date) }))
@@ -43,7 +47,7 @@ export function buildDriverModel(
   const samples: Sample[] = [];
   let joined = 0;
   let within = 0;
-  const t0 = c.length ? c[0]._t : 0;
+  const t0 = originMs ?? (c.length ? c[0]._t : 0);
 
   for (const cp of c) {
     while (j < l.length - 1 && Math.abs(l[j + 1]._t - cp._t) <= Math.abs(l[j]._t - cp._t)) j++;
@@ -72,7 +76,14 @@ export function buildDriverModel(
     const b = samples[i];
     b.d = a.d + Math.hypot((b.x - a.x) / 10, (b.y - a.y) / 10);
   }
-  return { ...meta, lap: lap.lap_number, lapTime: lap.lap_duration!, samples, joined, within };
+  return {
+    ...meta,
+    lap: lap ? lap.lap_number : 0,
+    lapTime: lap ? lap.lap_duration! : 0,
+    samples,
+    joined,
+    within,
+  };
 }
 
 export function finaliseModel(
@@ -116,7 +127,7 @@ export function fromOffline(s: OfflineSample): Model {
     joined: s.samples.length,
     within: s.samples.length,
   };
-  return finaliseModel([dm], `${s.meta.source} · ${s.meta.session} (bundled)`, false);
+  return finaliseModel([dm], `${s.meta.source} · ${s.meta.session} · Lap 1 (bundled)`, false);
 }
 
 // ---- interpolation ----

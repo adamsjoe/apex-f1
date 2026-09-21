@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Apex — F1 telemetry",
-  description: "F1 fastest-lap head-to-head telemetry replay, powered by OpenF1.",
+  description: "F1 Lap 1 head-to-head telemetry replay, powered by OpenF1.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

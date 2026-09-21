@@ -7,21 +7,29 @@ const proxied = (path: string) =>
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// OpenF1 occasionally 404s/errors transiently even for data that exists;
-// a short retry with backoff clears most of these without user intervention.
-const RETRY_ATTEMPTS = 3;
+// OpenF1 occasionally 404s/errors transiently even for data that exists, and
+// rate-limits bursts of concurrent requests with 429 + Retry-After; a short
+// retry with backoff (honouring Retry-After when present) clears most of
+// these without user intervention.
+const RETRY_ATTEMPTS = 4;
 const RETRY_DELAY_MS = 300;
+const MAX_RETRY_WAIT_MS = 5000;
 
 async function get<T>(path: string): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
-    if (attempt > 0) await sleep(RETRY_DELAY_MS * 2 ** (attempt - 1));
     try {
       const res = await fetch(proxied(path));
       if (res.ok) return (await res.json()) as T;
       lastErr = new Error(`HTTP ${res.status} for ${path}`);
+      if (attempt < RETRY_ATTEMPTS - 1) {
+        const retryAfterSec = Number(res.headers.get("retry-after"));
+        const wait = retryAfterSec > 0 ? retryAfterSec * 1000 : RETRY_DELAY_MS * 2 ** attempt;
+        await sleep(Math.min(wait, MAX_RETRY_WAIT_MS));
+      }
     } catch (e) {
       lastErr = e;
+      if (attempt < RETRY_ATTEMPTS - 1) await sleep(RETRY_DELAY_MS * 2 ** attempt);
     }
   }
   throw lastErr;

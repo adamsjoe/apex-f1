@@ -24,15 +24,17 @@ export async function GET(req: NextRequest) {
       next: { revalidate: 86400 },
     });
     const body = await upstream.text();
-    return new NextResponse(body, {
-      status: upstream.status,
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": upstream.ok
-          ? "public, s-maxage=86400, stale-while-revalidate=604800"
-          : "no-store",
-      },
-    });
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": upstream.ok
+        ? "public, s-maxage=86400, stale-while-revalidate=604800"
+        : "no-store",
+    };
+    // Forward OpenF1's Retry-After so callers can back off correctly on 429s
+    // instead of guessing a delay.
+    const retryAfter = upstream.headers.get("retry-after");
+    if (retryAfter) headers["Retry-After"] = retryAfter;
+    return new NextResponse(body, { status: upstream.status, headers });
   } catch (err) {
     return NextResponse.json({ error: "Upstream fetch failed", detail: String(err) }, { status: 502 });
   }

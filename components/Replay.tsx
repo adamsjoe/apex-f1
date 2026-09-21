@@ -15,7 +15,7 @@ export interface Stage {
 const CHECKS: [keyof ChecksState, string][] = [
   ["sessions", "Sessions loaded"],
   ["drivers", "Drivers loaded"],
-  ["laps", "Fastest laps found"],
+  ["laps", "Lap 1 found"],
   ["telemetry", "Telemetry fetched"],
   ["join", "Join within tolerance"],
 ];
@@ -178,6 +178,7 @@ export default function Replay({ model, stage, theme }: { model: Model | null; s
           <div className="drivers">
             {snap?.drivers.map((d) => (
               <div className="drv" key={d.code}>
+                {snap.drivers.length > 2 && <span className="pos">{d.position}</span>}
                 <span className="swatch" style={{ color: d.colour, background: d.colour }} />
                 <div className="dmeta">
                   <div className="dtop">
@@ -211,7 +212,7 @@ export default function Replay({ model, stage, theme }: { model: Model | null; s
                 ? snap.delta.level
                   ? "level"
                   : snap.delta.leader + " ahead"
-                : "single-lap demo — deploy for head-to-head"}
+                : "gap unavailable (needs exactly 2 drivers)"}
             </div>
           </div>
 
@@ -317,18 +318,20 @@ export default function Replay({ model, stage, theme }: { model: Model | null; s
         <span className="clock">
           {snap ? snap.T.toFixed(2) + " / " + snap.maxT.toFixed(2) + "s" : "0.00 / 0.00s"}
         </span>
-        <button
-          className="spd"
-          aria-label="Toggle zoom inset"
-          title="Zoom inset — a close-up that follows the two cars"
-          onClick={() => {
-            const n = !zoomOn;
-            setZoomOn(n);
-            engine?.setZoom(n);
-          }}
-        >
-          {zoomOn ? "Zoom ✓" : "Zoom"}
-        </button>
+        {(!snap || snap.drivers.length <= 2) && (
+          <button
+            className="spd"
+            aria-label="Toggle zoom inset"
+            title="Zoom inset — a close-up that follows the car(s)"
+            onClick={() => {
+              const n = !zoomOn;
+              setZoomOn(n);
+              engine?.setZoom(n);
+            }}
+          >
+            {zoomOn ? "Zoom ✓" : "Zoom"}
+          </button>
+        )}
         <button
           className="spd"
           aria-label="Toggle isometric view"
