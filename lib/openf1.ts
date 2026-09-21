@@ -5,10 +5,26 @@ import type { Of1Session, Of1Driver, Of1Lap, Of1Car, Of1Loc } from "./types";
 const proxied = (path: string) =>
   "/api/f1?u=" + encodeURIComponent("https://api.openf1.org" + path);
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// OpenF1 occasionally 404s/errors transiently even for data that exists;
+// a short retry with backoff clears most of these without user intervention.
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 300;
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(proxied(path));
-  if (!res.ok) throw new Error(`HTTP ${res.status} for ${path}`);
-  return (await res.json()) as T;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < RETRY_ATTEMPTS; attempt++) {
+    if (attempt > 0) await sleep(RETRY_DELAY_MS * 2 ** (attempt - 1));
+    try {
+      const res = await fetch(proxied(path));
+      if (res.ok) return (await res.json()) as T;
+      lastErr = new Error(`HTTP ${res.status} for ${path}`);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
 }
 
 export const getSessions = (year: number) =>

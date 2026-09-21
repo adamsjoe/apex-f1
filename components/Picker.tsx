@@ -52,9 +52,13 @@ export default function Picker({ onLoading, onModel, onError }: Props) {
       try {
         const s = await getSessions(year);
         if (cancelled) return;
-        s.sort((x, y2) => (y2.date_start || "").localeCompare(x.date_start || ""));
-        setSessions(s);
-        setSessionKey(s.length ? String(s[0].session_key) : "");
+        // Sessions that haven't happened yet have no telemetry behind them and
+        // would just 404 downstream, so drop anything still in the future.
+        const now = Date.now();
+        const happened = s.filter((sess) => !sess.date_start || Date.parse(sess.date_start) <= now);
+        happened.sort((x, y2) => (y2.date_start || "").localeCompare(x.date_start || ""));
+        setSessions(happened);
+        setSessionKey(happened.length ? String(happened[0].session_key) : "");
       } catch {
         if (!cancelled) {
           setSessions([]);
